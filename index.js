@@ -12,6 +12,7 @@ const moment = require('moment');
 
 const loginFacebook = require('./login_facebook'); // Import file Facebook Login
 const conn = require('./connectDB');
+const { parsePhrase, hasLimits, escapeTheme, formatLimits, pageAfterAge } = require('./lib/phrase-limits');
 
 // Khởi tạo ứng dụng Express
 const app = express();
@@ -1560,7 +1561,7 @@ app.get('/search', auth_user, cartMiddleware, (req, res) => {
   const cartItems = res.locals.cartItems;
   const totalAmount = res.locals.totalAmount;
 
-  const keyword = req.query.keyword || '';
+  const keyword = (req.query.keyword || '').trim();
   const category = req.query.category || 'all';
   const sortBy = req.query.sortBy || 'price-asc';
 
@@ -1575,61 +1576,101 @@ app.get('/search', auth_user, cartMiddleware, (req, res) => {
       return res.status(500).send("Database query error");
     }
 
-    const sqlCount = 'SELECT COUNT(*) AS total FROM product WHERE p_name_en LIKE ?';
-    conn.query(sqlCount, [`%${keyword}%`], (err, resultCount) => {
-      if (err) {
-        console.error("Error counting products: " + err.stack);
-        return res.status(500).send("Database query error");
-      }
+    const renderSearch = (products, totalProducts, limitsText) => {
+      const totalPages = totalProducts <= limit ? 1 : Math.ceil(totalProducts / limit);
+      res.render('search', {
+        website,
+        userLogin,
+        cartItems,
+        totalAmount,
+        products,
+        currentPage: page,
+        totalPages,
+        keyword,
+        categories: resultCategories,
+        category,
+        sortBy,
+        limitsText: limitsText || null
+      });
+    };
 
+    const orderClause = sortBy === 'price-desc'
+      ? ' ORDER BY discounted_price DESC'
+      : ' ORDER BY discounted_price ASC';
 
-      let sqlProducts = `
-        SELECT *, 
-               p_price_en * (1 - (p_discount / 100)) AS discounted_price 
-        FROM product 
-        WHERE p_name_en LIKE ?`;
-
-      if (category !== 'all') {
-        sqlProducts += ` AND p_category = ?`;
-      }
-
-      if (sortBy === 'price-asc') {
-        sqlProducts += ` ORDER BY discounted_price ASC`;
-      } else if (sortBy === 'price-desc') {
-        sqlProducts += ` ORDER BY discounted_price DESC`;
-      }
-
-      sqlProducts += ` LIMIT ${limit} OFFSET ${offset}`;
-
-      const queryParams = category !== 'all' ? [`%${keyword}%`, category] : [`%${keyword}%`];
-
-      conn.query(sqlProducts, queryParams, (err, resultProducts) => {
+    if (!keyword) {
+      const sqlCount = 'SELECT COUNT(*) AS total FROM product WHERE p_name_en LIKE ?';
+      conn.query(sqlCount, ['%%'], (err, resultCount) => {
         if (err) {
-          console.error("Error querying products: " + err.stack);
+          console.error("Error counting products: " + err.stack);
           return res.status(500).send("Database query error");
         }
-        const totalProducts = resultCount.total;
-        let totalPages = 1;
 
-        if (totalProducts <= limit) {
-          totalPages = 1;
-        } else {
-          totalPages = Math.ceil(totalProducts / limit);
+        let sqlProducts = `
+          SELECT *,
+                 p_price_en * (1 - (p_discount / 100)) AS discounted_price
+          FROM product
+          WHERE p_name_en LIKE ?`;
+        const queryParams = ['%%'];
+
+        if (category !== 'all') {
+          sqlProducts += ' AND p_category = ?';
+          queryParams.push(category);
         }
-        res.render('search', {
-          website,
-          userLogin,
-          cartItems,
-          totalAmount,
-          products: resultProducts,
-          currentPage: page,
-          totalPages,
-          keyword,
-          categories: resultCategories,
-          category,
-          sortBy
+
+        sqlProducts += orderClause;
+        sqlProducts += ' LIMIT ? OFFSET ?';
+        queryParams.push(limit, offset);
+
+        conn.query(sqlProducts, queryParams, (err, resultProducts) => {
+          if (err) {
+            console.error("Error querying products: " + err.stack);
+            return res.status(500).send("Database query error");
+          }
+          renderSearch(resultProducts, resultCount[0].total, null);
         });
       });
+      return;
+    }
+
+    const limits = parsePhrase(keyword);
+    if (!hasLimits(limits)) {
+      return renderSearch([], 0, null);
+    }
+
+    let sqlProducts = `
+      SELECT *,
+             p_price_en * (1 - (p_discount / 100)) AS discounted_price
+      FROM product
+      WHERE 1 = 1`;
+    const queryParams = [];
+
+    if (limits.priceMax != null) {
+      sqlProducts += ' AND p_price_en <= ?';
+      queryParams.push(limits.priceMax);
+    }
+    if (limits.priceMin != null) {
+      sqlProducts += ' AND p_price_en >= ?';
+      queryParams.push(limits.priceMin);
+    }
+    if (limits.theme) {
+      sqlProducts += " AND p_category LIKE ? ESCAPE '\\\\'";
+      queryParams.push(`%${escapeTheme(limits.theme)}%`);
+    }
+    if (category !== 'all') {
+      sqlProducts += ' AND p_category = ?';
+      queryParams.push(category);
+    }
+
+    sqlProducts += orderClause;
+
+    conn.query(sqlProducts, queryParams, (err, resultProducts) => {
+      if (err) {
+        console.error("Error querying products: " + err.stack);
+        return res.status(500).send("Database query error");
+      }
+      const paged = pageAfterAge(resultProducts, limits, offset, limit);
+      renderSearch(paged.products, paged.total, formatLimits(limits));
     });
   });
 });
