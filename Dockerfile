@@ -12,6 +12,10 @@ RUN npm install --production
 # Sao chép toàn bộ source code vào container
 COPY . .
 
+ENV TRANSFORMERS_CACHE=/usr/src/app/.cache/transformers
+RUN node scripts/cache-model.js
+ENV TRANSFORMERS_OFFLINE=1
+
 # Mở cổng 3001 (như được cấu hình trong index.js)
 EXPOSE 3001
 

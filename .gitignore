@@ -1,3 +1,13 @@
 node_modules/
+.cache/
 *.env
 *.pem
+
+# AIDE vendor install
+AIDE/
+.agents/
+AGENTS.md
+.tmp/
+
+# Personal AIDE config (active feature, local overrides)
+project.user.toml

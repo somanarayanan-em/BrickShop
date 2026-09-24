@@ -12,7 +12,7 @@ const moment = require('moment');
 
 const loginFacebook = require('./login_facebook'); // Import file Facebook Login
 const conn = require('./connectDB');
-const { parsePhrase, hasLimits, escapeTheme, formatLimits, pageAfterAge } = require('./lib/phrase-limits');
+const { hasLimits, escapeTheme, formatLimits, pageAfterAge, understandPhrase } = require('./lib/phrase-limits');
 
 // Khởi tạo ứng dụng Express
 const app = express();
@@ -1633,7 +1633,8 @@ app.get('/search', auth_user, cartMiddleware, (req, res) => {
       return;
     }
 
-    const limits = parsePhrase(keyword);
+    const categoryNames = resultCategories.map((row) => row.p_category);
+    understandPhrase(keyword, categoryNames).then((limits) => {
     if (!hasLimits(limits)) {
       return renderSearch([], 0, null);
     }
@@ -1671,6 +1672,12 @@ app.get('/search', auth_user, cartMiddleware, (req, res) => {
       }
       const paged = pageAfterAge(resultProducts, limits, offset, limit);
       renderSearch(paged.products, paged.total, formatLimits(limits));
+    });
+    }).catch(() => {
+      console.error('Search failed');
+      if (!res.headersSent) {
+        res.status(500).send('Database query error');
+      }
     });
   });
 });
